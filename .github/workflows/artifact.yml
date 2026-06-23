@@ -2,8 +2,9 @@ name: Artifact
 
 on:
   workflow_dispatch:
+  push:
+    branches: [master]
   pull_request:
-    types: [opened, reopened]
     branches: [master]
 
 jobs:
@@ -11,8 +12,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v3
-      - uses: actions/setup-node@v3
+        uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: 20
       - name: Get Info
@@ -26,25 +27,42 @@ jobs:
           git submodule update --init --recursive
           npm install
           npm run build
+          composer install --no-dev --optimize-autoloader
+          composer scope-dependencies
+          rm -rf vendor/firebase
+          composer dump-autoload --no-dev --optimize
           mkdir -p onlyoffice
           rsync -av --exclude='onlyoffice' . onlyoffice
           cd onlyoffice
           rm -rf ./.github/
           rm -rf ./.git/
-          rm ./.gitignore
-          rm ./.gitmodules
-          rm -rf ./node_modules/
-          rm -rf ./src/
-          rm ./package.json
-          rm ./package-lock.json
-          rm ./webpack.js
           rm -rf ./assets/document-templates/.git
           rm -rf ./assets/document-formats/.git
+          rm -rf ./node_modules/
+          rm -rf ./src/
+          rm -rf ./tests/
+          rm -rf ./vendor-bin/
+          rm ./.gitignore
+          rm ./.gitmodules
+          rm ./.stylelintrc.json
+          rm ./CLAUDE.md
+          rm ./composer.json
+          rm ./composer.lock
+          rm ./eslint.config.mjs
+          rm ./npm-shrinkwrap.json
+          rm ./package.json
           rm ./ruleset.xml
+          rm ./stylelint.config.js
+          rm ./vite.config.mjs
+          rm ./phpunit.xml
+          rm ./playwright.config.ts
+          rm ./psalm.xml
+          rm ./scoper.inc.php
+          rm ./tsconfig.json
           cd $cwd
           tar -czvf onlyoffice.tar.gz onlyoffice
       - name: Upload Artifact
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: onlyoffice
           path: onlyoffice.tar.gz

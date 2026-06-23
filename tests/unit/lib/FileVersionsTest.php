@@ -1,0 +1,102 @@
+<?php
+
+declare(strict_types=1);
+
+/*
+ * Copyright (C) Ascensio System SIA, 2009-2026
+ *
+ * This program is a free software product. You can redistribute it and/or
+ * modify it under the terms of the GNU Affero General Public License (AGPL)
+ * version 3 as published by the Free Software Foundation, together with the
+ * additional terms provided in the LICENSE file.
+ *
+ * This program is distributed WITHOUT ANY WARRANTY; without even the implied
+ * warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. For
+ * details, see the GNU AGPL at: https://www.gnu.org/licenses/agpl-3.0.html
+ *
+ * You can contact Ascensio System SIA by email at info@onlyoffice.com
+ * or by postal mail at 20A-6 Ernesta Birznieka-Upisha Street, Riga,
+ * LV-1050, Latvia, European Union.
+ *
+ * The interactive user interfaces in modified versions of the Program
+ * are required to display Appropriate Legal Notices in accordance with
+ * Section 5 of the GNU AGPL version 3.
+ *
+ * No trademark rights are granted under this License.
+ *
+ * All non-code elements of the Product, including illustrations,
+ * icon sets, and technical writing content, are licensed under the
+ * Creative Commons Attribution-ShareAlike 4.0 International License:
+ * https://creativecommons.org/licenses/by-sa/4.0/legalcode
+ *
+ * This license applies only to such non-code elements and does not
+ * modify or replace the licensing terms applicable to the Program's
+ * source code, which remains licensed under the GNU Affero General
+ * Public License v3.
+ *
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+
+namespace OCA\Onlyoffice\Tests\PHP;
+
+use OCA\Onlyoffice\FileVersions;
+use PHPUnit\Framework\Attributes\CoversClass;
+use Test\TestCase;
+
+#[CoversClass(FileVersions::class)]
+class FileVersionsTest extends TestCase {
+
+    /**
+     * Rejects an empty string without attempting regex parsing.
+     */
+    public function testSplitPathVersionReturnsFalseForEmptyString(): void {
+        $this->assertFalse(FileVersions::splitPathVersion(""));
+    }
+
+    /**
+     * Returns false for a plain file path that has no version suffix.
+     */
+    public function testSplitPathVersionReturnsFalseWhenNoVersionSuffix(): void {
+        $this->assertFalse(FileVersions::splitPathVersion("/files/document.docx"));
+    }
+
+    /**
+     * Returns false when the version suffix is non-numeric, as the version identifier must be a timestamp.
+     */
+    public function testSplitPathVersionReturnsFalseForNonNumericVersion(): void {
+        $this->assertFalse(FileVersions::splitPathVersion("/files/document.docx.vabc"));
+    }
+
+    /**
+     * Splits a correctly suffixed path into the base file path and the numeric version identifier.
+     */
+    public function testSplitPathVersionReturnsPathAndVersionForValidInput(): void {
+        $result = FileVersions::splitPathVersion("/files/document.docx.v1234567890");
+
+        $this->assertIsArray($result);
+        $this->assertSame("/files/document.docx", $result[0]);
+        $this->assertSame("1234567890", $result[1]);
+    }
+
+    /**
+     * Handles nested directory paths, returning the full path up to the version suffix as the file component.
+     */
+    public function testSplitPathVersionHandlesNestedPath(): void {
+        $result = FileVersions::splitPathVersion("/users/alice/files/report.xlsx.v1234567890");
+
+        $this->assertIsArray($result);
+        $this->assertSame("/users/alice/files/report.xlsx", $result[0]);
+        $this->assertSame("1234567890", $result[1]);
+    }
+
+    /**
+     * Parses filenames containing multiple dots correctly, treating only the trailing .v{digits} as the version.
+     */
+    public function testSplitPathVersionHandlesFilenameWithMultipleDots(): void {
+        $result = FileVersions::splitPathVersion("/files/report.final.v2.docx.v1234567890");
+
+        $this->assertIsArray($result);
+        $this->assertSame("/files/report.final.v2.docx", $result[0]);
+        $this->assertSame("1234567890", $result[1]);
+    }
+}

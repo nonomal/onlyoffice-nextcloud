@@ -1,37 +1,44 @@
 <?php
-/**
+/*
+ * Copyright (C) Ascensio System SIA, 2009-2026
  *
- * (c) Copyright Ascensio System SIA 2024
+ * This program is a free software product. You can redistribute it and/or
+ * modify it under the terms of the GNU Affero General Public License (AGPL)
+ * version 3 as published by the Free Software Foundation, together with the
+ * additional terms provided in the LICENSE file.
  *
- * This program is a free software product.
- * You can redistribute it and/or modify it under the terms of the GNU Affero General Public License
- * (AGPL) version 3 as published by the Free Software Foundation.
- * In accordance with Section 7(a) of the GNU AGPL its Section 15 shall be amended to the effect
- * that Ascensio System SIA expressly excludes the warranty of non-infringement of any third-party rights.
+ * This program is distributed WITHOUT ANY WARRANTY; without even the implied
+ * warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. For
+ * details, see the GNU AGPL at: https://www.gnu.org/licenses/agpl-3.0.html
  *
- * This program is distributed WITHOUT ANY WARRANTY;
- * without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
- * For details, see the GNU AGPL at: http://www.gnu.org/licenses/agpl-3.0.html
+ * You can contact Ascensio System SIA by email at info@onlyoffice.com
+ * or by postal mail at 20A-6 Ernesta Birznieka-Upisha Street, Riga,
+ * LV-1050, Latvia, European Union.
  *
- * You can contact Ascensio System SIA at 20A-12 Ernesta Birznieka-Upisha street, Riga, Latvia, EU, LV-1050.
+ * The interactive user interfaces in modified versions of the Program
+ * are required to display Appropriate Legal Notices in accordance with
+ * Section 5 of the GNU AGPL version 3.
  *
- * The interactive user interfaces in modified source and object code versions of the Program
- * must display Appropriate Legal Notices, as required under Section 5 of the GNU AGPL version 3.
+ * No trademark rights are granted under this License.
  *
- * Pursuant to Section 7(b) of the License you must retain the original Product logo when distributing the program.
- * Pursuant to Section 7(e) we decline to grant you any rights under trademark law for use of our trademarks.
+ * All non-code elements of the Product, including illustrations,
+ * icon sets, and technical writing content, are licensed under the
+ * Creative Commons Attribution-ShareAlike 4.0 International License:
+ * https://creativecommons.org/licenses/by-sa/4.0/legalcode
  *
- * All the Product's GUI elements, including illustrations and icon sets, as well as technical
- * writing content are licensed under the terms of the Creative Commons Attribution-ShareAlike 4.0 International.
- * See the License terms at http://creativecommons.org/licenses/by-sa/4.0/legalcode
+ * This license applies only to such non-code elements and does not
+ * modify or replace the licensing terms applicable to the Program's
+ * source code, which remains licensed under the GNU Affero General
+ * Public License v3.
  *
+ * SPDX-License-Identifier: AGPL-3.0-only
  */
 
 namespace OCA\Onlyoffice\Cron;
 
 use OCA\Onlyoffice\AppConfig;
-use OCA\Onlyoffice\Crypt;
 use OCA\Onlyoffice\DocumentService;
+use OCA\Onlyoffice\EmailManager;
 use OCP\AppFramework\Utility\ITimeFactory;
 use OCP\BackgroundJob\IJob;
 use OCP\BackgroundJob\TimedJob;
@@ -39,6 +46,7 @@ use OCP\IGroup;
 use OCP\IGroupManager;
 use OCP\IL10N;
 use OCP\IURLGenerator;
+use Psr\Log\LoggerInterface;
 
 /**
  * Editors availability check background job
@@ -46,82 +54,19 @@ use OCP\IURLGenerator;
  */
 class EditorsCheck extends TimedJob {
 
-    /**
-     * Application name
-     *
-     * @var string
-     */
-    private $appName;
-
-    /**
-     * Url generator service
-     *
-     * @var IURLGenerator
-     */
-    private $urlGenerator;
-
-    /**
-     * Logger
-     *
-     * @var OCP\ILogger
-     */
-    private $logger;
-
-    /**
-     * Application configuration
-     *
-     * @var AppConfig
-     */
-    private $config;
-
-    /**
-     * l10n service
-     *
-     * @var IL10N
-     */
-    private $trans;
-
-    /**
-     * Hash generator
-     *
-     * @var Crypt
-     */
-    private $crypt;
-
-    /**
-     * Group manager
-     *
-     * @var IGroupManager
-     */
-    private $groupManager;
-
-    /**
-     * @param string $AppName - application name
-     * @param IURLGenerator $urlGenerator - url generator service
-     * @param ITimeFactory $time - time
-     * @param AppConfig $config - application configuration
-     * @param IL10N $trans - l10n service
-     * @param Crypt $crypt - crypt service
-     */
     public function __construct(
-        string $AppName,
-        IURLGenerator $urlGenerator,
         ITimeFactory $time,
-        AppConfig $config,
-        IL10N $trans,
-        Crypt $crypt,
-        IGroupManager $groupManager
+        private readonly string $appName,
+        private readonly IURLGenerator $urlGenerator,
+        private readonly AppConfig $appConfig,
+        private readonly IL10N $trans,
+        private readonly IGroupManager $groupManager,
+        private readonly EmailManager $emailManager,
+        private readonly LoggerInterface $logger,
+        private readonly DocumentService $documentService
     ) {
         parent::__construct($time);
-        $this->appName = $AppName;
-        $this->urlGenerator = $urlGenerator;
-
-        $this->logger = \OC::$server->getLogger();
-        $this->config = $config;
-        $this->trans = $trans;
-        $this->crypt = $crypt;
-        $this->groupManager = $groupManager;
-        $this->setInterval($this->config->getEditorsCheckInterval());
+        $this->setInterval($this->appConfig->getEditorsCheckInterval());
         $this->setTimeSensitivity(IJob::TIME_SENSITIVE);
     }
 
@@ -130,36 +75,35 @@ class EditorsCheck extends TimedJob {
      *
      * @param array $argument unused argument
      */
-    protected function run($argument) {
-        if (empty($this->config->getDocumentServerUrl())) {
-            $this->logger->debug("Settings are empty", ["app" => $this->appName]);
+    protected function run($argument): void {
+        if (empty($this->appConfig->getDocumentServerUrl())) {
+            $this->logger->debug("Settings are empty");
             return;
         }
-        if (!$this->config->settingsAreSuccessful()) {
-            $this->logger->debug("Settings are not correct", ["app" => $this->appName]);
+        if (!$this->appConfig->settingsAreSuccessful()) {
+            $this->logger->debug("Settings are not correct");
             return;
         }
         $fileUrl = $this->urlGenerator->linkToRouteAbsolute($this->appName . ".callback.emptyfile");
-        if (!$this->config->useDemo() && !empty($this->config->getStorageUrl())) {
-            $fileUrl = str_replace($this->urlGenerator->getAbsoluteURL("/"), $this->config->getStorageUrl(), $fileUrl);
+        if (!$this->appConfig->useDemo() && !empty($this->appConfig->getStorageUrl())) {
+            $fileUrl = str_replace($this->urlGenerator->getAbsoluteURL("/"), $this->appConfig->getStorageUrl(), $fileUrl);
         }
-        $host = parse_url($fileUrl)["host"];
+        $host = parse_url((string) $fileUrl)["host"];
         if ($host === "localhost" || $host === "127.0.0.1") {
-            $this->logger->debug("Localhost is not alowed for cron editors availability check. Please provide server address for internal requests from ONLYOFFICE Docs", ["app" => $this->appName]);
+            $this->logger->debug("Localhost is not alowed for cron editors availability check. Please provide server address for internal requests from ONLYOFFICE Docs");
             return;
         }
 
-        $this->logger->debug("ONLYOFFICE check started by cron", ["app" => $this->appName]);
+        $this->logger->debug("ONLYOFFICE check started by cron");
 
-        $documentService = new DocumentService($this->trans, $this->config);
-        list($error, $version) = $documentService->checkDocServiceUrl($this->urlGenerator, $this->crypt);
+        [$error, $version] = $this->documentService->checkDocServiceUrl();
 
         if (!empty($error)) {
-            $this->logger->info("ONLYOFFICE server is not available", ["app" => $this->appName]);
-            $this->config->setSettingsError($error);
+            $this->logger->info("ONLYOFFICE server is not available");
+            $this->appConfig->setSettingsError($error);
             $this->notifyAdmins();
         } else {
-            $this->logger->debug("ONLYOFFICE server availability check is finished successfully", ["app" => $this->appName]);
+            $this->logger->debug("ONLYOFFICE server availability check is finished successfully");
         }
     }
 
@@ -168,7 +112,7 @@ class EditorsCheck extends TimedJob {
      *
      * @return string[]
      */
-    private function getUsersToNotify() {
+    private function getUsersToNotify(): array {
         $notifyGroups = ["admin"];
         $notifyUsers = [];
 
@@ -187,10 +131,9 @@ class EditorsCheck extends TimedJob {
 
     /**
      * Send notification to admins
-     * @return void
      */
-    private function notifyAdmins() {
-        $notificationManager = \OC::$server->getNotificationManager();
+    private function notifyAdmins(): void {
+        $notificationManager = \OCP\Server::get(\OCP\Notification\IManager::class);
         $notification = $notificationManager->createNotification();
         $notification->setApp($this->appName)
             ->setDateTime(new \DateTime())
@@ -199,6 +142,9 @@ class EditorsCheck extends TimedJob {
         foreach ($this->getUsersToNotify() as $uid) {
             $notification->setUser($uid);
             $notificationManager->notify($notification);
+            if ($this->appConfig->getEmailNotifications()) {
+                $this->emailManager->notifyEditorsCheckEmail($uid);
+            }
         }
     }
 }

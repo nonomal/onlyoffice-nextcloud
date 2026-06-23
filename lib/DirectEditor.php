@@ -1,30 +1,37 @@
 <?php
-/**
+/*
+ * Copyright (C) Ascensio System SIA, 2009-2026
  *
- * (c) Copyright Ascensio System SIA 2024
+ * This program is a free software product. You can redistribute it and/or
+ * modify it under the terms of the GNU Affero General Public License (AGPL)
+ * version 3 as published by the Free Software Foundation, together with the
+ * additional terms provided in the LICENSE file.
  *
- * This program is a free software product.
- * You can redistribute it and/or modify it under the terms of the GNU Affero General Public License
- * (AGPL) version 3 as published by the Free Software Foundation.
- * In accordance with Section 7(a) of the GNU AGPL its Section 15 shall be amended to the effect
- * that Ascensio System SIA expressly excludes the warranty of non-infringement of any third-party rights.
+ * This program is distributed WITHOUT ANY WARRANTY; without even the implied
+ * warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. For
+ * details, see the GNU AGPL at: https://www.gnu.org/licenses/agpl-3.0.html
  *
- * This program is distributed WITHOUT ANY WARRANTY;
- * without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
- * For details, see the GNU AGPL at: http://www.gnu.org/licenses/agpl-3.0.html
+ * You can contact Ascensio System SIA by email at info@onlyoffice.com
+ * or by postal mail at 20A-6 Ernesta Birznieka-Upisha Street, Riga,
+ * LV-1050, Latvia, European Union.
  *
- * You can contact Ascensio System SIA at 20A-12 Ernesta Birznieka-Upisha street, Riga, Latvia, EU, LV-1050.
+ * The interactive user interfaces in modified versions of the Program
+ * are required to display Appropriate Legal Notices in accordance with
+ * Section 5 of the GNU AGPL version 3.
  *
- * The interactive user interfaces in modified source and object code versions of the Program
- * must display Appropriate Legal Notices, as required under Section 5 of the GNU AGPL version 3.
+ * No trademark rights are granted under this License.
  *
- * Pursuant to Section 7(b) of the License you must retain the original Product logo when distributing the program.
- * Pursuant to Section 7(e) we decline to grant you any rights under trademark law for use of our trademarks.
+ * All non-code elements of the Product, including illustrations,
+ * icon sets, and technical writing content, are licensed under the
+ * Creative Commons Attribution-ShareAlike 4.0 International License:
+ * https://creativecommons.org/licenses/by-sa/4.0/legalcode
  *
- * All the Product's GUI elements, including illustrations and icon sets, as well as technical
- * writing content are licensed under the terms of the Creative Commons Attribution-ShareAlike 4.0 International.
- * See the License terms at http://creativecommons.org/licenses/by-sa/4.0/legalcode
+ * This license applies only to such non-code elements and does not
+ * modify or replace the licensing terms applicable to the Program's
+ * source code, which remains licensed under the GNU Affero General
+ * Public License v3.
  *
+ * SPDX-License-Identifier: AGPL-3.0-only
  */
 
 namespace OCA\Onlyoffice;
@@ -35,8 +42,7 @@ use OCP\AppFramework\Http\TemplateResponse;
 use OCP\DirectEditing\IEditor;
 use OCP\DirectEditing\IToken;
 use OCP\IL10N;
-use OCP\ILogger;
-use OCP\IURLGenerator;
+use Psr\Log\LoggerInterface;
 
 /**
  * Direct Editor
@@ -45,76 +51,16 @@ use OCP\IURLGenerator;
  */
 class DirectEditor implements IEditor {
 
-    /**
-     * Application name
-     *
-     * @var string
-     */
-    private $appName;
-
-    /**
-     * Url generator service
-     *
-     * @var IURLGenerator
-     */
-    private $urlGenerator;
-
-    /**
-     * l10n service
-     *
-     * @var IL10N
-     */
-    private $trans;
-
-    /**
-     * Logger
-     *
-     * @var ILogger
-     */
-    private $logger;
-
-    /**
-     * Application configuration
-     *
-     * @var AppConfig
-     */
-    private $config;
-
-    /**
-     * Hash generator
-     *
-     * @var Crypt
-     */
-    private $crypt;
-
-    /**
-     * @param string $AppName - application name
-     * @param IURLGenerator $urlGenerator - url generator service
-     * @param IL10N $trans - l10n service
-     * @param ILogger $logger - logger
-     * @param AppConfig $config - application configuration
-     * @param Crypt $crypt - hash generator
-     */
     public function __construct(
-        $AppName,
-        IURLGenerator $urlGenerator,
-        IL10N $trans,
-        ILogger $logger,
-        AppConfig $config,
-        Crypt $crypt
-    ) {
-        $this->appName = $AppName;
-        $this->urlGenerator = $urlGenerator;
-        $this->trans = $trans;
-        $this->logger = $logger;
-        $this->config = $config;
-        $this->crypt = $crypt;
-    }
+        private readonly string $appName,
+        private readonly IL10N $trans,
+        private readonly LoggerInterface $logger,
+        private readonly AppConfig $appConfig,
+        private readonly Crypt $crypt
+    ) {}
 
     /**
      * Return a unique identifier for the editor
-     *
-     * @return string
      */
     public function getId(): string {
         return $this->appName;
@@ -122,8 +68,6 @@ class DirectEditor implements IEditor {
 
     /**
      * Return a readable name for the editor
-     *
-     * @return string
      */
     public function getName(): string {
         return "ONLYOFFICE";
@@ -131,20 +75,17 @@ class DirectEditor implements IEditor {
 
     /**
      * A list of mimetypes that should open the editor by default
-     *
-     * @return array
      */
     public function getMimetypes(): array {
-        $mimes = array();
-        if (!$this->config->isUserAllowedToUse()) {
+        $mimes = [];
+        if (!$this->appConfig->isUserAllowedToUse()) {
             return $mimes;
         }
 
-        $formats = $this->config->formatsSetting();
-        foreach ($formats as $format => $setting) {
-            if (array_key_exists("edit", $setting) && $setting["edit"]
-                && array_key_exists("def", $setting) && $setting["def"]) {
-                array_push($mimes, $setting["mime"][0]);
+        $formats = $this->appConfig->formatsSetting();
+        foreach ($formats as $setting) {
+            if (array_key_exists("def", $setting) && $setting["def"]) {
+                $mimes[] = $setting["mime"][0];
             }
         }
 
@@ -153,20 +94,17 @@ class DirectEditor implements IEditor {
 
     /**
      * A list of mimetypes that can be opened in the editor optionally
-     *
-     * @return array
      */
     public function getMimetypesOptional(): array {
-        $mimes = array();
-        if (!$this->config->isUserAllowedToUse()) {
+        $mimes = [];
+        if (!$this->appConfig->isUserAllowedToUse()) {
             return $mimes;
         }
 
-        $formats = $this->config->formatsSetting();
-        foreach ($formats as $format => $setting) {
-            if (array_key_exists("edit", $setting) && $setting["edit"]
-                && (!array_key_exists("def", $setting) || !$setting["def"])) {
-                array_push($mimes, $setting["mime"][0]);
+        $formats = $this->appConfig->formatsSetting();
+        foreach ($formats as $setting) {
+            if (!array_key_exists("def", $setting) || !$setting["def"]) {
+                $mimes[] = $setting["mime"][0];
             }
         }
 
@@ -179,8 +117,8 @@ class DirectEditor implements IEditor {
      * @return array of ACreateFromTemplate|ACreateEmpty
      */
     public function getCreators(): array {
-        if (!$this->config->isUserAllowedToUse()) {
-            return array();
+        if (!$this->appConfig->isUserAllowedToUse()) {
+            return [];
         }
 
         return [
@@ -192,8 +130,6 @@ class DirectEditor implements IEditor {
 
     /**
      * Return if the view is able to securely view a file without downloading it to the browser
-     *
-     * @return bool
      */
     public function isSecure(): bool {
         return true;
@@ -207,8 +143,6 @@ class DirectEditor implements IEditor {
      * and take care of invalidation
      *
      * @param IToken $token - one time token
-     *
-     * @return Response
      */
     public function open(IToken $token): Response {
         try {
@@ -217,16 +151,21 @@ class DirectEditor implements IEditor {
             $fileId = $file->getId();
             $userId = $token->getUser();
 
-            $this->logger->debug("DirectEditor open: $fileId", ["app" => $this->appName]);
+            $this->logger->debug("DirectEditor open: $fileId");
 
-            if (!$this->config->isUserAllowedToUse($userId)) {
+            if (!$this->appConfig->isUserAllowedToUse($userId)) {
                 return $this->renderError($this->trans->t("Not permitted"));
             }
 
-            $documentServerUrl = $this->config->getDocumentServerUrl();
+            if ($this->appConfig->getRestrictExternalStorage()
+                && $file->getMountPoint() instanceof \OCA\Files_External\Config\ExternalMountPoint) {
+                return $this->renderError($this->trans->t("Opening files with ONLYOFFICE from external storages is restricted. Please contact the admin."));
+            }
+
+            $documentServerUrl = $this->appConfig->getDocumentServerUrl();
 
             if (empty($documentServerUrl)) {
-                $this->logger->error("documentServerUrl is empty", ["app" => $this->appName]);
+                $this->logger->error("documentServerUrl is empty");
                 return $this->renderError($this->trans->t("ONLYOFFICE app is not configured. Please contact admin"));
             }
 
@@ -239,10 +178,9 @@ class DirectEditor implements IEditor {
             ]);
 
             $filePath = $file->getPath();
-            $filePath = preg_replace("/^\/" . $userId . "\/files/", "", $filePath);
+            $filePath = preg_replace("/^\/" . $userId . "\/files/", "", (string) $filePath);
 
             $params = [
-                "documentServerUrl" => $documentServerUrl,
                 "fileId" => null,
                 "filePath" => $filePath,
                 "shareToken" => null,
@@ -250,8 +188,7 @@ class DirectEditor implements IEditor {
                 "isTemplate" => false,
                 "inframe" => false,
                 "inviewer" => false,
-                "anchor" => null,
-                "forceEdit" => false
+                "anchor" => null
             ];
 
             $response = new TemplateResponse($this->appName, "editor", $params, "base");
@@ -268,7 +205,7 @@ class DirectEditor implements IEditor {
 
             return $response;
         } catch (\Exception $e) {
-            $this->logger->logException($e, ["message" => "DirectEditor open", "app" => $this->appName]);
+            $this->logger->error($e->getMessage(), ["exception" => $e]);
             return $this->renderError($e->getMessage());
         }
     }
@@ -277,10 +214,8 @@ class DirectEditor implements IEditor {
      * Print error page
      *
      * @param string $error - error message
-     *
-     * @return TemplateResponse
      */
-    private function renderError($error) {
+    private function renderError(string $error): TemplateResponse {
         return new TemplateResponse($this->appName, "directeditorerror", [
             "error" => $error
         ], TemplateResponse::RENDER_AS_ERROR);

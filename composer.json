@@ -1,0 +1,58 @@
+{
+    "name": "onlyoffice/onlyoffice-nextcloud",
+    "authors": [
+        {
+            "name": "Ascensio System SIA",
+            "email": "integration@onlyoffice.com",
+            "homepage": "https://www.onlyoffice.com/"
+        }
+    ],
+    "autoload": {
+        "psr-4": {
+            "OCA\\Onlyoffice\\": "./lib/"
+        }
+    },
+    "scripts": {
+        "scope-dependencies": [
+            "composer update --working-dir=vendor-bin/php-scoper --no-interaction",
+            "vendor-bin/php-scoper/vendor/bin/php-scoper add-prefix --config=scoper.inc.php --force",
+            "rm -rf lib/Vendor",
+            "mkdir -p lib/Vendor/Firebase/JWT",
+            "cp build/*.php lib/Vendor/Firebase/JWT/",
+            "rm -rf build",
+            "composer dump-autoload"
+        ],
+        "scope-if-needed": "[ -d lib/Vendor ] || composer scope-dependencies",
+        "test:unit": [
+            "@scope-if-needed",
+            "vendor-bin/phpunit/vendor/bin/phpunit"
+        ],
+        "psalm": [
+            "@scope-if-needed",
+            "vendor-bin/psalm/vendor/bin/psalm --no-cache --threads=$(nproc)"
+        ],
+        "psalm:dev": "@psalm",
+        "psalm:update-baseline": "vendor-bin/psalm/vendor/bin/psalm --threads=1 --update-baseline --set-baseline=tests/psalm-baseline.xml",
+        "test:integration": [
+            "@scope-if-needed",
+            "vendor-bin/behat/vendor/bin/behat --config tests/integration/behat/config/behat.php"
+        ]
+    },
+    "require": {
+        "php": ">=8.2 <8.6",
+        "firebase/php-jwt": "^6.0"
+    },
+    "require-dev": {
+        "bamarni/composer-bin-plugin": "^1.9"
+    },
+    "config": {
+        "allow-plugins": {
+            "bamarni/composer-bin-plugin": true
+        }
+    },
+    "extra": {
+        "bamarni-bin": {
+            "bin-links": false
+        }
+    }
+}

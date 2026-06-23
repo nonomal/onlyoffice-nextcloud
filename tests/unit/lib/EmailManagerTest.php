@@ -1,0 +1,330 @@
+<?php
+
+declare(strict_types=1);
+
+/*
+ * Copyright (C) Ascensio System SIA, 2009-2026
+ *
+ * This program is a free software product. You can redistribute it and/or
+ * modify it under the terms of the GNU Affero General Public License (AGPL)
+ * version 3 as published by the Free Software Foundation, together with the
+ * additional terms provided in the LICENSE file.
+ *
+ * This program is distributed WITHOUT ANY WARRANTY; without even the implied
+ * warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. For
+ * details, see the GNU AGPL at: https://www.gnu.org/licenses/agpl-3.0.html
+ *
+ * You can contact Ascensio System SIA by email at info@onlyoffice.com
+ * or by postal mail at 20A-6 Ernesta Birznieka-Upisha Street, Riga,
+ * LV-1050, Latvia, European Union.
+ *
+ * The interactive user interfaces in modified versions of the Program
+ * are required to display Appropriate Legal Notices in accordance with
+ * Section 5 of the GNU AGPL version 3.
+ *
+ * No trademark rights are granted under this License.
+ *
+ * All non-code elements of the Product, including illustrations,
+ * icon sets, and technical writing content, are licensed under the
+ * Creative Commons Attribution-ShareAlike 4.0 International License:
+ * https://creativecommons.org/licenses/by-sa/4.0/legalcode
+ *
+ * This license applies only to such non-code elements and does not
+ * modify or replace the licensing terms applicable to the Program's
+ * source code, which remains licensed under the GNU Affero General
+ * Public License v3.
+ *
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+
+namespace OCA\Onlyoffice\Tests\PHP;
+
+use OCA\Onlyoffice\EmailManager;
+use OCP\IL10N;
+use OCP\IURLGenerator;
+use OCP\IUser;
+use OCP\IUserManager;
+use OCP\Mail\IEMailTemplate;
+use OCP\Mail\IMailer;
+use OCP\Mail\IMessage;
+use OCP\Mail\Provider\IAddress;
+use OCP\Mail\Provider\IManager as MailProviderIManager;
+use OCP\Mail\Provider\IService;
+use PHPUnit\Framework\Attributes\AllowMockObjectsWithoutExpectations;
+use PHPUnit\Framework\Attributes\CoversClass;
+use PHPUnit\Framework\MockObject\MockObject;
+use Psr\Log\LoggerInterface;
+use Test\TestCase;
+
+#[CoversClass(EmailManager::class)]
+#[AllowMockObjectsWithoutExpectations]
+class EmailManagerTest extends TestCase {
+
+    private IMailer&MockObject $mailer;
+    private IUserManager&MockObject $userManager;
+    private IURLGenerator&MockObject $urlGenerator;
+    private MailProviderIManager&MockObject $mailManager;
+    private EmailManager $emailManager;
+
+    public function setUp(): void {
+        parent::setUp();
+
+        $trans = $this->createStub(IL10N::class);
+        $trans->method("t")->willReturnArgument(0);
+
+        $this->mailer       = $this->createMock(IMailer::class);
+        $this->userManager  = $this->createMock(IUserManager::class);
+        $this->urlGenerator = $this->createMock(IURLGenerator::class);
+        $this->mailManager  = $this->createMock(MailProviderIManager::class);
+
+        $this->emailManager = new EmailManager(
+            "onlyoffice",
+            $trans,
+            $this->createStub(LoggerInterface::class),
+            $this->mailer,
+            $this->userManager,
+            $this->urlGenerator,
+            $this->mailManager,
+        );
+    }
+
+    private function makeUser(string $email = "user@example.com", string $name = "User"): IUser&MockObject {
+        $user = $this->createMock(IUser::class);
+        $user->method("getEMailAddress")->willReturn($email);
+        $user->method("getDisplayName")->willReturn($name);
+        return $user;
+    }
+
+    private function stubSuccessfulSend(): void {
+        $template = $this->createStub(IEMailTemplate::class);
+        $this->mailer->method("createEMailTemplate")->willReturn($template);
+
+        $message = $this->createStub(IMessage::class);
+        $this->mailer->method("createMessage")->willReturn($message);
+        $this->mailer->method("send")->willReturn([]);
+    }
+
+    /**
+     * Returns false immediately when the recipient user does not exist in the user manager.
+     */
+    public function testNotifyMentionEmailReturnsFalseWhenRecipientNotFound(): void {
+        $this->userManager->method("get")->willReturn(null);
+
+        $result = $this->emailManager->notifyMentionEmail("notifier", "recipient", "1", "file.docx", "#anchor", "comment text");
+
+        $this->assertFalse($result);
+    }
+
+    /**
+     * Returns false when the recipient exists but has no email address configured.
+     */
+    public function testNotifyMentionEmailReturnsFalseWhenRecipientHasNoEmail(): void {
+        $recipient = $this->makeUser("");
+        $this->userManager->method("get")->willReturn($recipient);
+
+        $result = $this->emailManager->notifyMentionEmail("notifier", "recipient", "1", "file.docx", "#anchor", "comment text");
+
+        $this->assertFalse($result);
+    }
+
+    /**
+     * Returns false when the notifier user does not exist, as their display name is needed to build the email.
+     */
+    public function testNotifyMentionEmailReturnsFalseWhenNotifierNotFound(): void {
+        $recipient = $this->makeUser("recipient@example.com");
+
+        $this->userManager->method("get")->willReturnCallback(
+            fn($id) => $id === "recipient" ? $recipient : null
+        );
+
+        $result = $this->emailManager->notifyMentionEmail("notifier", "recipient", "1", "file.docx", "#anchor", "comment text");
+
+        $this->assertFalse($result);
+    }
+
+    /**
+     * Returns true when both users exist, have email addresses, and the mailer sends successfully.
+     */
+    public function testNotifyMentionEmailReturnsTrueOnSuccess(): void {
+        $recipient = $this->makeUser("recipient@example.com", "Recipient");
+        $notifier  = $this->makeUser("notifier@example.com", "Notifier");
+
+        $this->userManager->method("get")->willReturnCallback(
+            fn($id) => match ($id) {
+                "recipient" => $recipient,
+                "notifier"  => $notifier,
+                default     => null,
+            }
+        );
+
+        $this->urlGenerator->method("linkToRouteAbsolute")->willReturn("https://example.com/file");
+        $this->stubSuccessfulSend();
+
+        $result = $this->emailManager->notifyMentionEmail("notifier", "recipient", "1", "file.docx", "#anchor", "comment text");
+
+        $this->assertTrue($result);
+    }
+
+    /**
+     * Catches a mailer exception gracefully and returns false instead of propagating it.
+     */
+    public function testNotifyMentionEmailReturnsFalseWhenMailerThrows(): void {
+        $recipient = $this->makeUser("recipient@example.com", "Recipient");
+        $notifier  = $this->makeUser("notifier@example.com", "Notifier");
+
+        $this->userManager->method("get")->willReturnCallback(
+            fn($id) => match ($id) {
+                "recipient" => $recipient,
+                "notifier"  => $notifier,
+                default     => null,
+            }
+        );
+
+        $this->urlGenerator->method("linkToRouteAbsolute")->willReturn("https://example.com/file");
+
+        $template = $this->createStub(IEMailTemplate::class);
+        $this->mailer->method("createEMailTemplate")->willReturn($template);
+
+        $message = $this->createStub(IMessage::class);
+        $this->mailer->method("createMessage")->willReturn($message);
+        $this->mailer->method("send")->willThrowException(new \Exception("SMTP error"));
+
+        $result = $this->emailManager->notifyMentionEmail("notifier", "recipient", "1", "file.docx", "#anchor", "comment text");
+
+        $this->assertFalse($result);
+    }
+
+    /**
+     * Returns false immediately when the target user does not exist in the user manager.
+     */
+    public function testNotifyEditorsCheckEmailReturnsFalseWhenUserNotFound(): void {
+        $this->userManager->method("get")->willReturn(null);
+
+        $result = $this->emailManager->notifyEditorsCheckEmail("admin");
+
+        $this->assertFalse($result);
+    }
+
+    /**
+     * Returns false when the user has no email address, as the downtime alert cannot be delivered.
+     */
+    public function testNotifyEditorsCheckEmailReturnsFalseWhenUserHasNoEmail(): void {
+        $user = $this->makeUser("");
+        $this->userManager->method("get")->willReturn($user);
+
+        $result = $this->emailManager->notifyEditorsCheckEmail("admin");
+
+        $this->assertFalse($result);
+    }
+
+    /**
+     * Returns true when the user exists, has an email address, and the mailer delivers without errors.
+     */
+    public function testNotifyEditorsCheckEmailReturnsTrueOnSuccess(): void {
+        $user = $this->makeUser("admin@example.com", "Admin");
+        $this->userManager->method("get")->willReturn($user);
+
+        $this->urlGenerator->method("getAbsoluteURL")->willReturn("https://example.com/settings");
+        $this->stubSuccessfulSend();
+
+        $result = $this->emailManager->notifyEditorsCheckEmail("admin");
+
+        $this->assertTrue($result);
+    }
+
+    /**
+     * Returns false when the mailer reports delivery failures via a non-empty errors array.
+     */
+    public function testNotifyEditorsCheckEmailReturnsFalseWhenMailerReturnsErrors(): void {
+        $user = $this->makeUser("admin@example.com", "Admin");
+        $this->userManager->method("get")->willReturn($user);
+
+        $this->urlGenerator->method("getAbsoluteURL")->willReturn("https://example.com/settings");
+
+        $template = $this->createStub(IEMailTemplate::class);
+        $this->mailer->method("createEMailTemplate")->willReturn($template);
+
+        $message = $this->createStub(IMessage::class);
+        $this->mailer->method("createMessage")->willReturn($message);
+        $this->mailer->method("send")->willReturn(["admin@example.com"]);
+
+        $result = $this->emailManager->notifyEditorsCheckEmail("admin");
+
+        $this->assertFalse($result);
+    }
+
+    /**
+     * Returns an empty array when the mail manager reports no services for the user.
+     */
+    public function testGetSenderAddressesForReturnsEmptyWhenNoServices(): void {
+        $this->mailManager->method("services")->willReturn([]);
+
+        $result = $this->emailManager->getSenderAddressesFor("user1");
+
+        $this->assertSame([], $result);
+    }
+
+    /**
+     * Services that lack the MessageSend capability are excluded from the result.
+     */
+    public function testGetSenderAddressesForFiltersOutNonSendCapableServices(): void {
+        $service = $this->createStub(IService::class);
+        $service->method("capable")->willReturn(false);
+
+        $this->mailManager->method("services")->willReturn([[$service]]);
+
+        $result = $this->emailManager->getSenderAddressesFor("user1");
+
+        $this->assertSame([], $result);
+    }
+
+    /**
+     * Returns the primary address of a service that has the MessageSend capability.
+     */
+    public function testGetSenderAddressesForReturnsAddressOfCapableService(): void {
+        $address = $this->createStub(IAddress::class);
+        $address->method("getAddress")->willReturn("sender@example.com");
+
+        $service = $this->createStub(IService::class);
+        $service->method("capable")->willReturn(true);
+        $service->method("getPrimaryAddress")->willReturn($address);
+
+        $this->mailManager->method("services")->willReturn([[$service]]);
+
+        $result = $this->emailManager->getSenderAddressesFor("user1");
+
+        $this->assertSame(["sender@example.com"], $result);
+    }
+
+    /**
+     * Capable and non-capable services across multiple providers are merged correctly,
+     * with only capable service addresses included.
+     */
+    public function testGetSenderAddressesForHandlesMultipleProvidersAndServices(): void {
+        $address1 = $this->createStub(IAddress::class);
+        $address1->method("getAddress")->willReturn("a@example.com");
+
+        $capableService = $this->createStub(IService::class);
+        $capableService->method("capable")->willReturn(true);
+        $capableService->method("getPrimaryAddress")->willReturn($address1);
+
+        $incapableService = $this->createStub(IService::class);
+        $incapableService->method("capable")->willReturn(false);
+
+        $address2 = $this->createStub(IAddress::class);
+        $address2->method("getAddress")->willReturn("b@example.com");
+
+        $anotherCapableService = $this->createStub(IService::class);
+        $anotherCapableService->method("capable")->willReturn(true);
+        $anotherCapableService->method("getPrimaryAddress")->willReturn($address2);
+
+        $this->mailManager->method("services")->willReturn([
+            [$capableService, $incapableService],
+            [$anotherCapableService],
+        ]);
+
+        $result = $this->emailManager->getSenderAddressesFor("user1");
+
+        $this->assertSame(["a@example.com", "b@example.com"], $result);
+    }
+}

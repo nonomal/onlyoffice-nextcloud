@@ -1,41 +1,54 @@
 <?php
-/**
+/*
+ * Copyright (C) Ascensio System SIA, 2009-2026
  *
- * (c) Copyright Ascensio System SIA 2024
+ * This program is a free software product. You can redistribute it and/or
+ * modify it under the terms of the GNU Affero General Public License (AGPL)
+ * version 3 as published by the Free Software Foundation, together with the
+ * additional terms provided in the LICENSE file.
  *
- * This program is a free software product.
- * You can redistribute it and/or modify it under the terms of the GNU Affero General Public License
- * (AGPL) version 3 as published by the Free Software Foundation.
- * In accordance with Section 7(a) of the GNU AGPL its Section 15 shall be amended to the effect
- * that Ascensio System SIA expressly excludes the warranty of non-infringement of any third-party rights.
+ * This program is distributed WITHOUT ANY WARRANTY; without even the implied
+ * warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. For
+ * details, see the GNU AGPL at: https://www.gnu.org/licenses/agpl-3.0.html
  *
- * This program is distributed WITHOUT ANY WARRANTY;
- * without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
- * For details, see the GNU AGPL at: http://www.gnu.org/licenses/agpl-3.0.html
+ * You can contact Ascensio System SIA by email at info@onlyoffice.com
+ * or by postal mail at 20A-6 Ernesta Birznieka-Upisha Street, Riga,
+ * LV-1050, Latvia, European Union.
  *
- * You can contact Ascensio System SIA at 20A-12 Ernesta Birznieka-Upisha street, Riga, Latvia, EU, LV-1050.
+ * The interactive user interfaces in modified versions of the Program
+ * are required to display Appropriate Legal Notices in accordance with
+ * Section 5 of the GNU AGPL version 3.
  *
- * The interactive user interfaces in modified source and object code versions of the Program
- * must display Appropriate Legal Notices, as required under Section 5 of the GNU AGPL version 3.
+ * No trademark rights are granted under this License.
  *
- * Pursuant to Section 7(b) of the License you must retain the original Product logo when distributing the program.
- * Pursuant to Section 7(e) we decline to grant you any rights under trademark law for use of our trademarks.
+ * All non-code elements of the Product, including illustrations,
+ * icon sets, and technical writing content, are licensed under the
+ * Creative Commons Attribution-ShareAlike 4.0 International License:
+ * https://creativecommons.org/licenses/by-sa/4.0/legalcode
  *
- * All the Product's GUI elements, including illustrations and icon sets, as well as technical
- * writing content are licensed under the terms of the Creative Commons Attribution-ShareAlike 4.0 International.
- * See the License terms at http://creativecommons.org/licenses/by-sa/4.0/legalcode
+ * This license applies only to such non-code elements and does not
+ * modify or replace the licensing terms applicable to the Program's
+ * source code, which remains licensed under the GNU Affero General
+ * Public License v3.
  *
+ * SPDX-License-Identifier: AGPL-3.0-only
  */
 
 namespace OCA\Onlyoffice\Controller;
 
+use OC\Files\SetupManager;
 use OCA\Files_Versions\Versions\IVersionManager;
 use OCA\Onlyoffice\AppConfig;
 use OCA\Onlyoffice\Crypt;
 use OCA\Onlyoffice\DocumentService;
+use OCA\Onlyoffice\Events\DocumentUnsavedEvent;
+use OCA\Onlyoffice\Events\MailMergeEndedEvent;
 use OCA\Onlyoffice\FileVersions;
 use OCA\Onlyoffice\FileUtility;
 use OCA\Onlyoffice\KeyManager;
+use OCA\Onlyoffice\MailMergeMessage;
+use OCA\Onlyoffice\MailMergeAttachment;
+use OCA\Onlyoffice\MailMergeService;
 use OCA\Onlyoffice\RemoteInstance;
 use OCA\Onlyoffice\TemplateManager;
 use OCP\AppFramework\Controller;
@@ -43,7 +56,11 @@ use OCP\AppFramework\Http;
 use OCP\AppFramework\Http\DataDownloadResponse;
 use OCP\AppFramework\Http\JSONResponse;
 use OCP\AppFramework\Http\StreamResponse;
-use OCP\AppFramework\QueryException;
+use OCP\AppFramework\Http\Attribute\CORS;
+use OCP\AppFramework\Http\Attribute\NoAdminRequired;
+use OCP\AppFramework\Http\Attribute\NoCSRFRequired;
+use OCP\AppFramework\Http\Attribute\PublicPage;
+use OCP\EventDispatcher\IEventDispatcher;
 use OCP\Files\File;
 use OCP\Files\Folder;
 use OCP\Files\IRootFolder;
@@ -55,7 +72,6 @@ use OCP\Files\Lock\OwnerLockedException;
 use OCP\Files\NotFoundException;
 use OCP\Files\NotPermittedException;
 use OCP\IL10N;
-use OCP\ILogger;
 use OCP\IRequest;
 use OCP\IUserManager;
 use OCP\IUserSession;
@@ -63,6 +79,7 @@ use OCP\Lock\LockedException;
 use OCP\PreConditionNotMetException;
 use OCP\Share\Exceptions\ShareNotFound;
 use OCP\Share\IManager;
+use Psr\Log\LoggerInterface;
 
 /**
  * Callback handler for the document server.
@@ -72,130 +89,39 @@ use OCP\Share\IManager;
 class CallbackController extends Controller {
 
     /**
-     * Root folder
-     *
-     * @var IRootFolder
-     */
-    private $root;
-
-    /**
-     * User session
-     *
-     * @var IUserSession
-     */
-    private $userSession;
-
-    /**
-     * User manager
-     *
-     * @var IUserManager
-     */
-    private $userManager;
-
-    /**
-     * l10n service
-     *
-     * @var IL10N
-     */
-    private $trans;
-
-    /**
-     * Logger
-     *
-     * @var OCP\ILogger
-     */
-    private $logger;
-
-    /**
-     * Application configuration
-     *
-     * @var AppConfig
-     */
-    private $config;
-
-    /**
-     * Hash generator
-     *
-     * @var Crypt
-     */
-    private $crypt;
-
-    /**
-     * Share manager
-     *
-     * @var IManager
-     */
-    private $shareManager;
-
-    /**
-     * File version manager
-     *
-     * @var IVersionManager
-     */
-    private $versionManager;
-
-    /**
-     * Lock manager
-     *
-     * @var ILockManager
-     */
-    private $lockManager;
-
-    /**
      * Status of the document
      */
     private const TRACKERSTATUS_EDITING = 1;
     private const TRACKERSTATUS_MUSTSAVE = 2;
     private const TRACKERSTATUS_CORRUPTED = 3;
     private const TRACKERSTATUS_CLOSED = 4;
+    private const TRACKERSTATUS_MAILMERGE = 5;
     private const TRACKERSTATUS_FORCESAVE = 6;
     private const TRACKERSTATUS_CORRUPTEDFORCESAVE = 7;
 
-    /**
-     * @param string $AppName - application name
-     * @param IRequest $request - request object
-     * @param IRootFolder $root - root folder
-     * @param IUserSession $userSession - current user session
-     * @param IUserManager $userManager - user manager
-     * @param IL10N $trans - l10n service
-     * @param ILogger $logger - logger
-     * @param AppConfig $config - application configuration
-     * @param Crypt $crypt - hash generator
-     * @param IManager $shareManager - Share manager
-     * @param ILockManager $lockManager - Lock manager
-     */
+    private const TYPE_HTML = 0;
+    private const TYPE_ATTACH_DOCX = 1;
+
     public function __construct(
-        $AppName,
+        string $appName,
         IRequest $request,
-        IRootFolder $root,
-        IUserSession $userSession,
-        IUserManager $userManager,
-        IL10N $trans,
-        ILogger $logger,
-        AppConfig $config,
-        Crypt $crypt,
-        IManager $shareManager,
-        ILockManager $lockManager
+        private readonly IRootFolder $root,
+        private readonly IUserSession $userSession,
+        private readonly IUserManager $userManager,
+        private readonly IL10N $trans,
+        private readonly LoggerInterface $logger,
+        private readonly AppConfig $appConfig,
+        private readonly Crypt $crypt,
+        private readonly IManager $shareManager,
+        private readonly ILockManager $lockManager,
+        private readonly IEventDispatcher $eventDispatcher,
+        private readonly ?IVersionManager $versionManager,
+        private readonly DocumentService $documentService,
+        private readonly KeyManager $keyManager,
+        private readonly SetupManager $setupManager,
+        private readonly MailMergeService $mailMergeService
     ) {
-        parent::__construct($AppName, $request);
-
-        $this->root = $root;
-        $this->userSession = $userSession;
-        $this->userManager = $userManager;
-        $this->trans = $trans;
-        $this->logger = $logger;
-        $this->config = $config;
-        $this->crypt = $crypt;
-        $this->shareManager = $shareManager;
-        $this->lockManager = $lockManager;
-
-        if (\OC::$server->getAppManager()->isInstalled("files_versions")) {
-            try {
-                $this->versionManager = \OC::$server->query(IVersionManager::class);
-            } catch (QueryException $e) {
-                $this->logger->logException($e, ["message" => "VersionManager init error", "app" => $this->appName]);
-            }
-        }
+        parent::__construct($appName, $request);
     }
 
 
@@ -205,43 +131,43 @@ class CallbackController extends Controller {
      * @param string $doc - verification token with the file identifier
      *
      * @return StreamResponse|JSONResponse
-     *
-     * @NoAdminRequired
-     * @NoCSRFRequired
-     * @PublicPage
-     * @CORS
      */
-    public function download($doc) {
+    #[CORS]
+    #[NoAdminRequired]
+    #[NoCSRFRequired]
+    #[PublicPage]
+    public function download(string $doc): StreamResponse|JSONResponse {
 
-        list($hashData, $error) = $this->crypt->readHash($doc);
+        [$hashData, $error] = $this->crypt->readHash($doc);
         if ($hashData === null) {
-            $this->logger->error("Download with empty or not correct hash: $error", ["app" => $this->appName]);
+            $this->logger->error("Download with empty or not correct hash: $error");
             return new JSONResponse(["message" => $this->trans->t("Access denied")], Http::STATUS_FORBIDDEN);
         }
         if ($hashData->action !== "download") {
-            $this->logger->error("Download with other action", ["app" => $this->appName]);
+            $this->logger->error("Download with other action");
             return new JSONResponse(["message" => $this->trans->t("Invalid request")], Http::STATUS_BAD_REQUEST);
         }
 
         $fileId = $hashData->fileId;
-        $version = isset($hashData->version) ? $hashData->version : null;
-        $changes = isset($hashData->changes) ? $hashData->changes : false;
-        $template = isset($hashData->template) ? $hashData->template : false;
-        $this->logger->debug("Download: $fileId ($version)" . ($changes ? " changes" : ""), ["app" => $this->appName]);
+        $version = $hashData->version ?? 0;
+        $changes = $hashData->changes ?? false;
+        $template = $hashData->template ?? false;
+        $filePath = $hashData->filePath ?? "";
+        $this->logger->debug("Download: $fileId ($version)" . ($changes ? " changes" : ""));
 
-        if (!empty($this->config->getDocumentServerSecret())) {
-            $header = \OC::$server->getRequest()->getHeader($this->config->jwtHeader());
+        if (!empty($this->appConfig->getDocumentServerSecret())) {
+            $header = $this->request->getHeader($this->appConfig->jwtHeader());
             if (empty($header)) {
-                $this->logger->error("Download without jwt", ["app" => $this->appName]);
+                $this->logger->error("Download without jwt");
                 return new JSONResponse(["message" => $this->trans->t("Access denied")], Http::STATUS_FORBIDDEN);
             }
 
-            $header = substr($header, strlen("Bearer "));
+            $header = substr((string) $header, strlen("Bearer "));
 
             try {
-                $decodedHeader = \Firebase\JWT\JWT::decode($header, new \Firebase\JWT\Key($this->config->getDocumentServerSecret(), "HS256"));
+                $decodedHeader = \OCA\Onlyoffice\Vendor\Firebase\JWT\JWT::decode($header, new \OCA\Onlyoffice\Vendor\Firebase\JWT\Key($this->appConfig->getDocumentServerSecret(), "HS256"));
             } catch (\UnexpectedValueException $e) {
-                $this->logger->logException($e, ["message" => "Download with invalid jwt", "app" => $this->appName]);
+                $this->logger->error("Download with invalid jwt", ["exception" => $e]);
                 return new JSONResponse(["message" => $this->trans->t("Access denied")], Http::STATUS_FORBIDDEN);
             }
         }
@@ -249,10 +175,10 @@ class CallbackController extends Controller {
         $userId = null;
         $user = null;
         if ($this->userSession->isLoggedIn()) {
-            $this->logger->debug("Download: by $userId instead of " . $hashData->userId, ["app" => $this->appName]);
+            $this->logger->debug("Download: by $userId instead of " . $hashData->userId);
         }
 
-        \OC_Util::tearDownFS();
+        $this->setupManager->tearDown();
 
         if (isset($hashData->userId)) {
             $userId = $hashData->userId;
@@ -260,12 +186,12 @@ class CallbackController extends Controller {
             $user = $this->userManager->get($userId);
             if (!empty($user)) {
                 \OC_User::setUserId($userId);
-                \OC_Util::setupFS($userId);
+                $this->setupManager->setupForUser($user);
             }
         }
 
-        $shareToken = isset($hashData->shareToken) ? $hashData->shareToken : null;
-        list($file, $error, $share) = empty($shareToken) ? $this->getFile($userId, $fileId, null, $changes ? null : $version, $template) : $this->getFileByToken($fileId, $shareToken, $changes ? null : $version);
+        $shareToken = $hashData->shareToken ?? null;
+        [$file, $error, $share] = empty($shareToken) ? $this->getFile($userId, $fileId, $filePath, $changes ? 0 : $version, $template) : $this->getFileByToken($fileId, $shareToken, $changes ? 0 : $version);
 
         if (isset($error)) {
             return $error;
@@ -274,38 +200,38 @@ class CallbackController extends Controller {
         $canDownload = true;
 
         $fileStorage = $file->getStorage();
-        if ($fileStorage->instanceOfStorage("\OCA\Files_Sharing\SharedStorage") || !empty($shareToken)) {
+        if ($fileStorage->instanceOfStorage(\OCA\Files_Sharing\SharedStorage::class) || !empty($shareToken)) {
             $share = empty($share) ? $fileStorage->getShare() : $share;
             $canDownload = FileUtility::canShareDownload($share);
-            if (!$canDownload && !empty($this->config->getDocumentServerSecret())) {
+            if (!$canDownload && !empty($this->appConfig->getDocumentServerSecret())) {
                 $canDownload = true;
             }
         }
 
         if ((!empty($user) && !$file->isReadable()) || !$canDownload) {
-            if ($this->userSession->getUID() != $userId) {
-                $this->logger->error("Download error: expected $userId instead of " . $this->userSession->getUID(), ["app" => $this->appName]);
+            if ($this->userSession->getUser()?->getUID() != $userId) {
+                $this->logger->error("Download error: expected $userId instead of " . $this->userSession->getUser()?->getUID());
             }
-            $this->logger->error("Download without access right", ["app" => $this->appName]);
+            $this->logger->error("Download without access right");
             return new JSONResponse(["message" => $this->trans->t("Access denied")], Http::STATUS_FORBIDDEN);
         }
 
         if (empty($user)) {
             $owner = $file->getFileInfo()->getOwner();
             if ($owner !== null) {
-                \OC_Util::setupFS($owner->getUID());
+                $this->setupManager->setupForUser($owner);
             }
         }
 
         if ($changes) {
-            if ($this->versionManager === null) {
-                $this->logger->error("Download changes: versionManager is null", ["app" => $this->appName]);
+            if (!$this->versionManager instanceof IVersionManager) {
+                $this->logger->error("Download changes: versionManager is null");
                 return new JSONResponse(["message" => $this->trans->t("Invalid request")], Http::STATUS_BAD_REQUEST);
             }
 
             $owner = $file->getFileInfo()->getOwner();
             if ($owner === null) {
-                $this->logger->error("Download: changes owner of $fileId was not found", ["app" => $this->appName]);
+                $this->logger->error("Download: changes owner of $fileId was not found");
                 return new JSONResponse(["message" => $this->trans->t("Files not found")], Http::STATUS_NOT_FOUND);
             }
 
@@ -321,8 +247,8 @@ class CallbackController extends Controller {
             }
 
             $changesFile = FileVersions::getChangesFile($owner->getUID(), $file->getFileInfo(), $versionId);
-            if ($changesFile === null) {
-                $this->logger->error("Download: changes $fileId ($version) was not found", ["app" => $this->appName]);
+            if (!$changesFile instanceof \OC\Files\Node\File) {
+                $this->logger->error("Download: changes $fileId ($version) was not found");
                 return new JSONResponse(["message" => $this->trans->t("Files not found")], Http::STATUS_NOT_FOUND);
             }
 
@@ -330,12 +256,15 @@ class CallbackController extends Controller {
         }
 
         try {
-            $response = new StreamResponse($file->fopen('rb'));
-            $response->addHeader('Content-Disposition', 'attachment; filename="' . rawurldecode($file->getName()) . '"');
-            $response->addHeader('Content-Type', $file->getMimeType());
-            return $response;
+            $handle = $file->fopen('rb');
+            if ($handle !== false && $handle !== null) {
+                $response = new StreamResponse($handle);
+                $response->addHeader('Content-Disposition', 'attachment; filename="' . rawurldecode((string) $file->getName()) . '"');
+                $response->addHeader('Content-Type', $file->getMimeType());
+                return $response;
+            }
         } catch (NotPermittedException  $e) {
-            $this->logger->logException($e, ["message" => "Download Not permitted: $fileId ($version)", "app" => $this->appName]);
+            $this->logger->error("Download Not permitted: $fileId ($version)", ["exception" => $e]);
             return new JSONResponse(["message" => $this->trans->t("Not permitted")], Http::STATUS_FORBIDDEN);
         }
         return new JSONResponse(["message" => $this->trans->t("Download failed")], Http::STATUS_INTERNAL_SERVER_ERROR);
@@ -347,54 +276,53 @@ class CallbackController extends Controller {
      * @param string $doc - verification token with the file identifier
      *
      * @return DataDownloadResponse|JSONResponse
-     *
-     * @NoAdminRequired
-     * @NoCSRFRequired
-     * @PublicPage
-     * @CORS
      */
-    public function emptyfile($doc) {
-        $this->logger->debug("Download empty", ["app" => $this->appName]);
+    #[CORS]
+    #[NoAdminRequired]
+    #[NoCSRFRequired]
+    #[PublicPage]
+    public function emptyfile(string $doc): DataDownloadResponse|JSONResponse {
+        $this->logger->debug("Download empty");
 
-        list($hashData, $error) = $this->crypt->readHash($doc);
+        [$hashData, $error] = $this->crypt->readHash($doc);
         if ($hashData === null) {
-            $this->logger->error("Download empty with empty or not correct hash: $error", ["app" => $this->appName]);
+            $this->logger->error("Download empty with empty or not correct hash: $error");
             return new JSONResponse(["message" => $this->trans->t("Access denied")], Http::STATUS_FORBIDDEN);
         }
         if ($hashData->action !== "empty") {
-            $this->logger->error("Download empty with other action", ["app" => $this->appName]);
+            $this->logger->error("Download empty with other action");
             return new JSONResponse(["message" => $this->trans->t("Invalid request")], Http::STATUS_BAD_REQUEST);
         }
 
-        if (!empty($this->config->getDocumentServerSecret())) {
-            $header = \OC::$server->getRequest()->getHeader($this->config->jwtHeader());
+        if (!empty($this->appConfig->getDocumentServerSecret())) {
+            $header = $this->request->getHeader($this->appConfig->jwtHeader());
             if (empty($header)) {
-                $this->logger->error("Download empty without jwt", ["app" => $this->appName]);
+                $this->logger->error("Download empty without jwt");
                 return new JSONResponse(["message" => $this->trans->t("Access denied")], Http::STATUS_FORBIDDEN);
             }
 
-            $header = substr($header, strlen("Bearer "));
+            $header = substr((string) $header, strlen("Bearer "));
 
             try {
-                $decodedHeader = \Firebase\JWT\JWT::decode($header, new \Firebase\JWT\Key($this->config->getDocumentServerSecret(), "HS256"));
+                $decodedHeader = \OCA\Onlyoffice\Vendor\Firebase\JWT\JWT::decode($header, new \OCA\Onlyoffice\Vendor\Firebase\JWT\Key($this->appConfig->getDocumentServerSecret(), "HS256"));
             } catch (\UnexpectedValueException $e) {
-                $this->logger->logException($e, ["message" => "Download empty with invalid jwt", "app" => $this->appName]);
+                $this->logger->error("Download empty with invalid jwt", ["exception" => $e]);
                 return new JSONResponse(["message" => $this->trans->t("Access denied")], Http::STATUS_FORBIDDEN);
             }
         }
 
-        $templatePath = TemplateManager::getEmptyTemplatePath("en", ".docx");
+        $templatePath = TemplateManager::getEmptyTemplatePath("default", ".docx");
 
         $template = file_get_contents($templatePath);
         if (!$template) {
-            $this->logger->info("Template for download empty not found: $templatePath", ["app" => $this->appName]);
+            $this->logger->info("Template for download empty not found: $templatePath");
             return new JSONResponse(["message" => $this->trans->t("File not found")], Http::STATUS_NOT_FOUND);
         }
 
         try {
             return new DataDownloadResponse($template, "new.docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document");
         } catch (NotPermittedException  $e) {
-            $this->logger->logException($e, ["message" => "Download Not permitted", "app" => $this->appName]);
+            $this->logger->error("Download Not permitted", ["exception" => $e]);
             return new JSONResponse(["message" => $this->trans->t("Not permitted")], Http::STATUS_FORBIDDEN);
         }
         return new JSONResponse(["message" => $this->trans->t("Download failed")], Http::STATUS_INTERNAL_SERVER_ERROR);
@@ -403,77 +331,89 @@ class CallbackController extends Controller {
     /**
      * Handle request from the document server with the document status information
      *
-     * @param string $doc - verification token with the file identifier
-     * @param array $users - the list of the identifiers of the users
-     * @param string $key - the edited document identifier
-     * @param integer $status - the edited status
-     * @param string $url - the link to the edited document to be saved
-     * @param string $token - request signature
-     * @param array $history - file history
-     * @param string $changesurl - link to file changes
-     * @param integer $forcesavetype - the type of force save action
-     * @param array $actions - the array of action
-     * @param string $filetype - extension of the document that is downloaded from the link specified with the url parameter
+     * @param string $doc verification token with the file identifier
+     * @param string $key the edited document identifier
+     * @param int $status the edited status
+     * @param array $actions the array of action
+     * @param array $users the list of the identifiers of the users
+     * @param string $changesurl link to file changes
+     * @param string $filetype extension of the document that is downloaded from the link specified with the url parameter
+     * @param mixed $forcesavetype the type of force save action
+     * @param array $history file history
+     * @param string $url the link to the edited document to be saved
+     * @param string $token request signature
      *
-     * @return array
-     *
-     * @NoAdminRequired
-     * @NoCSRFRequired
-     * @PublicPage
-     * @CORS
+     * @return JSONResponse
      */
-    public function track($doc, $users, $key, $status, $url, $token, $history, $changesurl, $forcesavetype, $actions, $filetype) {
+    #[CORS]
+    #[NoAdminRequired]
+    #[NoCSRFRequired]
+    #[PublicPage]
+    public function track(
+        string $doc,
+        string $key,
+        int $status,
+        ?array $actions = null,
+        ?array $users = null,
+        ?string $changesurl = null,
+        ?string $filetype = null,
+        ?int $forcesavetype = null,
+        ?array $history = null,
+        ?string $url = null,
+        ?string $token = null
+    ): JSONResponse {
 
-        list($hashData, $error) = $this->crypt->readHash($doc);
+        [$hashData, $error] = $this->crypt->readHash($doc);
         if ($hashData === null) {
-            $this->logger->error("Track with empty or not correct hash: $error", ["app" => $this->appName]);
+            $this->logger->error("Track with empty or not correct hash: $error");
             return new JSONResponse(["message" => $this->trans->t("Access denied")], Http::STATUS_FORBIDDEN);
         }
         if ($hashData->action !== "track") {
-            $this->logger->error("Track with other action", ["app" => $this->appName]);
+            $this->logger->error("Track with other action");
             return new JSONResponse(["message" => $this->trans->t("Invalid request")], Http::STATUS_BAD_REQUEST);
         }
 
         $fileId = $hashData->fileId;
-        $this->logger->debug("Track: $fileId status $status", ["app" => $this->appName]);
+        $this->logger->debug("Track: $fileId status $status");
 
-        if (!empty($this->config->getDocumentServerSecret())) {
+        if (!empty($this->appConfig->getDocumentServerSecret())) {
             if (!empty($token)) {
                 try {
-                    $payload = \Firebase\JWT\JWT::decode($token, new \Firebase\JWT\Key($this->config->getDocumentServerSecret(), "HS256"));
+                    $payload = \OCA\Onlyoffice\Vendor\Firebase\JWT\JWT::decode($token, new \OCA\Onlyoffice\Vendor\Firebase\JWT\Key($this->appConfig->getDocumentServerSecret(), "HS256"));
                 } catch (\UnexpectedValueException $e) {
-                    $this->logger->logException($e, ["message" => "Track with invalid jwt in body", "app" => $this->appName]);
+                    $this->logger->error("Track with invalid jwt in body", ["exception" => $e]);
                     return new JSONResponse(["message" => $this->trans->t("Access denied")], Http::STATUS_FORBIDDEN);
                 }
             } else {
-                $header = \OC::$server->getRequest()->getHeader($this->config->jwtHeader());
+                $header = $this->request->getHeader($this->appConfig->jwtHeader());
                 if (empty($header)) {
-                    $this->logger->error("Track without jwt", ["app" => $this->appName]);
+                    $this->logger->error("Track without jwt");
                     return new JSONResponse(["message" => $this->trans->t("Access denied")], Http::STATUS_FORBIDDEN);
                 }
 
-                $header = substr($header, strlen("Bearer "));
+                $header = substr((string) $header, strlen("Bearer "));
 
                 try {
-                    $decodedHeader = \Firebase\JWT\JWT::decode($header, new \Firebase\JWT\Key($this->config->getDocumentServerSecret(), "HS256"));
+                    $decodedHeader = \OCA\Onlyoffice\Vendor\Firebase\JWT\JWT::decode($header, new \OCA\Onlyoffice\Vendor\Firebase\JWT\Key($this->appConfig->getDocumentServerSecret(), "HS256"));
 
                     $payload = $decodedHeader->payload;
                 } catch (\UnexpectedValueException $e) {
-                    $this->logger->logException($e, ["message" => "Track with invalid jwt", "app" => $this->appName]);
+                    $this->logger->error("Track with invalid jwt", ["exception" => $e]);
                     return new JSONResponse(["message" => $this->trans->t("Access denied")], Http::STATUS_FORBIDDEN);
                 }
             }
 
-            $users = isset($payload->users) ? $payload->users : null;
+            $users = $payload->users ?? null;
             $key = $payload->key;
             $status = $payload->status;
-            $url = isset($payload->url) ? $payload->url : null;
+            $url = $payload->url ?? null;
+            $mailMergeData = $payload->mailMerge ?? null;
         }
 
-        $shareToken = isset($hashData->shareToken) ? $hashData->shareToken : null;
-        $filePath = null;
+        $shareToken = $hashData->shareToken ?? null;
+        $filePath = $hashData->filePath;
 
-        \OC_Util::tearDownFS();
+        $this->setupManager->tearDown();
 
         $isForcesave = $status === self::TRACKERSTATUS_FORCESAVE || $status === self::TRACKERSTATUS_CORRUPTEDFORCESAVE;
 
@@ -500,11 +440,11 @@ class CallbackController extends Controller {
             \OC_User::setUserId($userId);
         } else {
             if (empty($shareToken)) {
-                $this->logger->error("Track without token: $fileId status $status", ["app" => $this->appName]);
+                $this->logger->error("Track without token: $fileId status $status");
                 return new JSONResponse(["message" => $this->trans->t("Access denied")], Http::STATUS_FORBIDDEN);
             }
 
-            $this->logger->debug("Track $fileId by token for $userId", ["app" => $this->appName]);
+            $this->logger->debug("Track $fileId by token for $userId");
         }
 
         // owner of file from the callback link
@@ -525,14 +465,14 @@ class CallbackController extends Controller {
             }
         }
 
-        if (!empty($userId)) {
-            \OC_Util::setupFS($userId);
+        if (!empty($userId) && empty($shareToken) && ($setupUser = $this->userManager->get($userId))) {
+            $this->setupManager->setupForUser($setupUser);
         }
 
-        list($file, $error, $share) = empty($shareToken) ? $this->getFile($userId, $fileId, $filePath) : $this->getFileByToken($fileId, $shareToken);
+        [$file, $error, $share] = empty($shareToken) ? $this->getFile($userId, $fileId, $filePath) : $this->getFileByToken($fileId, $shareToken);
 
         if (isset($error)) {
-            $this->logger->error("track error $fileId " . json_encode($error->getData()), ["app" => $this->appName]);
+            $this->logger->error("track error $fileId " . json_encode($error->getData()));
             return $error;
         }
 
@@ -543,50 +483,47 @@ class CallbackController extends Controller {
             case self::TRACKERSTATUS_FORCESAVE:
             case self::TRACKERSTATUS_CORRUPTEDFORCESAVE:
                 if (empty($url)) {
-                    $this->logger->error("Track without url: $fileId status $status", ["app" => $this->appName]);
+                    $this->logger->error("Track without url: $fileId status $status");
                     return new JSONResponse(["message" => "Url not found"], Http::STATUS_BAD_REQUEST);
                 }
 
                 try {
-                    $url = $this->config->replaceDocumentServerUrlToInternal($url);
+                    $url = $this->appConfig->replaceDocumentServerUrlToInternal($url);
 
                     $prevVersion = $file->getFileInfo()->getMtime();
                     $fileName = $file->getName();
-                    $curExt = strtolower(pathinfo($fileName, PATHINFO_EXTENSION));
+                    $curExt = strtolower(pathinfo((string) $fileName, PATHINFO_EXTENSION));
                     $downloadExt = $filetype;
 
-                    $documentService = new DocumentService($this->trans, $this->config);
                     if ($downloadExt !== $curExt) {
                         $key = DocumentService::generateRevisionId($fileId . $url);
 
                         try {
-                            $this->logger->debug("Converted from $downloadExt to $curExt", ["app" => $this->appName]);
-                            $url = $documentService->getConvertedUri($url, $downloadExt, $curExt, $key);
+                            $this->logger->debug("Converted from $downloadExt to $curExt");
+                            $url = $this->documentService->getConvertedUri($url, $downloadExt, $curExt, $key);
                         } catch (\Exception $e) {
-                            $this->logger->logException($e, ["message" => "Converted on save error", "app" => $this->appName]);
+                            $this->logger->error("Converted on save error", ["exception" => $e]);
                             return new JSONResponse(["message" => $e->getMessage()], Http::STATUS_INTERNAL_SERVER_ERROR);
                         }
                     }
 
-                    $newData = $documentService->request($url);
+                    $newData = $this->documentService->request($url);
 
-                    $prevIsForcesave = KeyManager::wasForcesave($fileId);
+                    $prevIsForcesave = $this->keyManager->wasForcesave($fileId);
 
                     if (RemoteInstance::isRemoteFile($file)) {
-                        $isLock = RemoteInstance::lockRemoteKey($file, $isForcesave, null);
+                        $isLock = RemoteInstance::lockRemoteKey($file, $isForcesave, false);
                         if ($isForcesave && !$isLock) {
                             break;
                         }
                     } else {
-                        KeyManager::lock($fileId, $isForcesave);
+                        $this->keyManager->lock($fileId, $isForcesave);
                     }
 
-                    $this->logger->debug("Track put content " . $file->getPath(), ["app" => $this->appName]);
+                    $this->logger->debug("Track put content " . $file->getPath());
 
-                    $retryOperation = function () use ($file, $newData) {
-                        $this->retryOperation(function () use ($file, $newData) {
-                            return $file->putContent($newData);
-                        });
+                    $retryOperation = function () use ($file, $newData): void {
+                        $this->retryOperation(fn() => $file->putContent($newData));
                     };
 
                     try {
@@ -605,34 +542,116 @@ class CallbackController extends Controller {
                             RemoteInstance::lockRemoteKey($file, false, $isForcesave);
                         }
                     } else {
-                        KeyManager::lock($fileId, false);
-                        KeyManager::setForcesave($fileId, $isForcesave);
+                        $this->keyManager->lock($fileId, false);
+                        $this->keyManager->setForcesave($fileId, $isForcesave);
                     }
 
                     if (!$isForcesave
                         && !$prevIsForcesave
-                        && $this->versionManager !== null
-                        && $this->config->getVersionHistory()) {
+                        && $this->versionManager instanceof IVersionManager
+                        && $this->appConfig->getVersionHistory()) {
                         $changes = null;
                         if (!empty($changesurl)) {
-                            $changesurl = $this->config->replaceDocumentServerUrlToInternal($changesurl);
+                            $changesurl = $this->appConfig->replaceDocumentServerUrlToInternal($changesurl);
                             try {
-                                $changes = $documentService->request($changesurl);
+                                $changes = $this->documentService->request($changesurl);
                             } catch (\Exception $e) {
-                                $this->logger->logException($e, ["message" => "Failed to download changes", "app" => $this->appName]);
+                                $this->logger->error("Failed to download changes", ["exception" => $e]);
                             }
                         }
                         FileVersions::saveHistory($file->getFileInfo(), $history, $changes, $prevVersion);
                     }
 
-                    if (!empty($user) && $this->config->getVersionHistory()) {
+                    if (!empty($user) && $this->appConfig->getVersionHistory()) {
                         FileVersions::saveAuthor($file->getFileInfo(), $user);
                     }
 
                     $result = 0;
-                } catch (\Exception $e) {
-                    $this->logger->logException($e, ["message" => "Track: $fileId status $status error", "app" => $this->appName]);
+                } catch (\Exception | \Error $e) {
+                    $this->logger->error("Track: $fileId status $status error", ["exception" => $e]);
+                    // if ($status === self::TRACKERSTATUS_MUSTSAVE) {
+                    //     $this->eventDispatcher->dispatchTyped(new DocumentUnsavedEvent($userId, $fileId, $file->getName()));
+                    // }
                 }
+                break;
+
+            case self::TRACKERSTATUS_MAILMERGE:
+                $mailMergeStatusMessage = null;
+
+                if (empty($url)) {
+                    $this->logger->error("MailMerge: file url cannot be empty");
+                    return new JSONResponse(["message" => "Url not found"], Http::STATUS_BAD_REQUEST);
+                }
+
+                if (empty($user)) {
+                    $this->logger->error("MailMerge: user not found");
+                    return new JSONResponse(["message" => "User not found"], Http::STATUS_BAD_REQUEST);
+                }
+
+                if ($mailMergeData === null) {
+                    $this->logger->error("MailMerge: data cannot be empty");
+                    return new JSONResponse(["message" => "MailMerge data not found"], Http::STATUS_BAD_REQUEST);
+                }
+
+                try {
+                    $url = $this->appConfig->replaceDocumentServerUrlToInternal($url);
+                    $data = $this->documentService->request($url);
+                    $isHtml = $mailMergeData->type === self::TYPE_HTML;
+                    $bodyPlain = $mailMergeData->message ?? '';
+                    $bodyHtml = $isHtml ? $data : '';
+
+                    $mailMergeMessage = (new MailMergeMessage())
+                        ->setFrom($mailMergeData->from)
+                        ->setTo($mailMergeData->to)
+                        ->setSubject($mailMergeData->subject)
+                        ->setBodyPlain($bodyPlain)
+                        ->setBodyHtml($bodyHtml);
+
+                    if (!$isHtml) {
+                        $attachmentExtension = $mailMergeData->type === self::TYPE_ATTACH_DOCX ? 'docx' : 'pdf';
+                        $attachmentName = pathinfo($mailMergeData->title ?? 'Attach', PATHINFO_FILENAME) . ".$attachmentExtension";
+                        $mailMergeAttachment = (new MailMergeAttachment())
+                            ->setName($attachmentName)
+                            ->setExtension($attachmentExtension)
+                            ->setContent($data);
+                        $mailMergeMessage->setAttachment($mailMergeAttachment);
+                    }
+                
+                    $this->mailMergeService->send($userId, $mailMergeMessage);
+                    $recordIndex = $mailMergeData->recordIndex + 1;
+                    $this->logger->info(
+                        "DocService MailMerge {$recordIndex}/{$mailMergeData->recordCount}"
+                    );
+                } catch (\Exception $e) {
+                    $recordCounterString = empty($mailMergeData) ? "" : " {$mailMergeData->recordIndex}/{$mailMergeData->recordCount} ";
+                    $userIdString = $userId ?? "";
+                    $urlString = $url ?? "";
+                    $this->logger->error(
+                        "DocService MailMerge$recordCounterString error: userId - $userIdString, url - $urlString",
+                        ['exception' => $e]
+                    );
+                    $mailMergeStatusMessage = $e->getMessage();
+                }
+
+                if ($mailMergeData !== null && $mailMergeData->recordIndex === ($mailMergeData->recordCount - 1)) {
+                    $errorCount = !$mailMergeStatusMessage ? $mailMergeData->recordErrorCount : $mailMergeData->recordErrorCount + 1;
+                    $mailMergeEndedEvent = new MailMergeEndedEvent(
+                        $userId,
+                        $mailMergeData->from,
+                        $mailMergeData->recordCount,
+                        $errorCount
+                    );
+                    $this->eventDispatcher->dispatchTyped($mailMergeEndedEvent);
+                }
+
+                if ($mailMergeStatusMessage) {
+                    return new JSONResponse(
+                        ["error" => 1, "message" => $mailMergeStatusMessage],
+                        Http::STATUS_BAD_REQUEST
+                    );
+                }
+
+                $result = 0;
                 break;
 
             case self::TRACKERSTATUS_EDITING:
@@ -647,7 +666,7 @@ class CallbackController extends Controller {
                 break;
         }
 
-        $this->logger->debug("Track: $fileId status $status result $result", ["app" => $this->appName]);
+        $this->logger->debug("Track: $fileId status $status result $result");
 
         return new JSONResponse(["error" => $result], Http::STATUS_OK);
     }
@@ -661,24 +680,28 @@ class CallbackController extends Controller {
      * @param string $filePath - file path
      * @param integer $version - file version
      * @param bool $template - file is template
-     *
-     * @return array
      */
-    private function getFile($userId, $fileId, $filePath = null, $version = 0, $template = false) {
+    private function getFile(
+        ?string $userId,
+        ?int $fileId,
+        ?string $filePath = null,
+        int $version = 0,
+        bool $template = false
+    ): array {
         if (empty($fileId)) {
             return [null, new JSONResponse(["message" => $this->trans->t("FileId is empty")], Http::STATUS_BAD_REQUEST), null];
         }
 
         try {
-            $folder = !$template ? $this->root->getUserFolder($userId) : TemplateManager::getGlobalTemplateDir();
+            $folder = $template ? TemplateManager::getGlobalTemplateDir() : $this->root->getUserFolder($userId);
             $files = $folder->getById($fileId);
         } catch (\Exception $e) {
-            $this->logger->logException($e, ["message" => "getFile: $fileId", "app" => $this->appName]);
+            $this->logger->error("getFile: $fileId", ["exception" => $e]);
             return [null, new JSONResponse(["message" => $this->trans->t("Invalid request")], Http::STATUS_BAD_REQUEST), null];
         }
 
         if (empty($files)) {
-            $this->logger->error("Files not found: $fileId", ["app" => $this->appName]);
+            $this->logger->error("Files not found: $fileId");
             return [null, new JSONResponse(["message" => $this->trans->t("Files not found")], Http::STATUS_NOT_FOUND), null];
         }
 
@@ -695,16 +718,16 @@ class CallbackController extends Controller {
         }
 
         if (!($file instanceof File)) {
-            $this->logger->error("File not found: $fileId", ["app" => $this->appName]);
-            return [null, new JSONResponse(["message" => $this->trans->t("File not found")], Http::STATUS_NOT_FOUND)];
+            $this->logger->error("File not found: $fileId");
+            return [null, new JSONResponse(["message" => $this->trans->t("File not found")], Http::STATUS_NOT_FOUND), null];
         }
 
-        if ($version > 0 && $this->versionManager !== null) {
-            $owner = $file->getFileInfo()->getOwner();
+        if ($version > 0 && $this->versionManager instanceof IVersionManager) {
+            $owner = $file->getOwner();
 
             if ($owner !== null) {
                 if ($owner->getUID() !== $userId) {
-                    list($file, $error, $share) = $this->getFile($owner->getUID(), $file->getId());
+                    [$file, $error, $share] = $this->getFile($owner->getUID(), $file->getId());
 
                     if (isset($error)) {
                         return [null, $error, null];
@@ -728,11 +751,9 @@ class CallbackController extends Controller {
      * @param integer $fileId - file identifier
      * @param string $shareToken - access token
      * @param integer $version - file version
-     *
-     * @return array
      */
-    private function getFileByToken($fileId, $shareToken, $version = 0) {
-        list($share, $error) = $this->getShare($shareToken);
+    private function getFileByToken(int $fileId, string $shareToken, int $version = 0): array {
+        [$share, $error] = $this->getShare($shareToken);
 
         if (isset($error)) {
             return [null, $error, null];
@@ -741,7 +762,7 @@ class CallbackController extends Controller {
         try {
             $node = $share->getNode();
         } catch (NotFoundException $e) {
-            $this->logger->logException($e, ["message" => "getFileByToken error", "app" => $this->appName]);
+            $this->logger->error("getFileByToken error", ["exception" => $e]);
             return [null, new JSONResponse(["message" => $this->trans->t("File not found")], Http::STATUS_NOT_FOUND), null];
         }
 
@@ -749,11 +770,12 @@ class CallbackController extends Controller {
             try {
                 $files = $node->getById($fileId);
             } catch (\Exception $e) {
-                $this->logger->logException($e, ["message" => "getFileByToken: $fileId", "app" => $this->appName]);
+                $this->logger->error("getFileByToken: $fileId", ["exception" => $e]);
                 return [null, new JSONResponse(["message" => $this->trans->t("Invalid request")], Http::STATUS_NOT_FOUND), null];
             }
 
             if (empty($files)) {
+                $this->logger->error("getFileByToken Files not found: $fileId");
                 return [null, new JSONResponse(["message" => $this->trans->t("File not found")], Http::STATUS_NOT_FOUND), null];
             }
             $file = $files[0];
@@ -761,7 +783,7 @@ class CallbackController extends Controller {
             $file = $node;
         }
 
-        if ($version > 0 && $this->versionManager !== null) {
+        if ($version > 0 && $this->versionManager instanceof IVersionManager) {
             $owner = $file->getFileInfo()->getOwner();
 
             if ($owner !== null) {
@@ -780,10 +802,8 @@ class CallbackController extends Controller {
      * Getting share by token
      *
      * @param string $shareToken - access token
-     *
-     * @return array
      */
-    private function getShare($shareToken) {
+    private function getShare(?string $shareToken): array {
         if (empty($shareToken)) {
             return [null, new JSONResponse(["message" => $this->trans->t("FileId is empty")], Http::STATUS_BAD_REQUEST)];
         }
@@ -792,7 +812,7 @@ class CallbackController extends Controller {
         try {
             $share = $this->shareManager->getShareByToken($shareToken);
         } catch (ShareNotFound $e) {
-            $this->logger->logException($e, ["message" => "getShare error", "app" => $this->appName]);
+            $this->logger->error("getShare error", ["exception" => $e]);
             $share = null;
         }
 
@@ -807,14 +827,12 @@ class CallbackController extends Controller {
      * Parse user identifier for current instance
      *
      * @param string $userId - unique user identifier
-     *
-     * @return string
      */
-    private function parseUserId($userId) {
-        $instanceId = $this->config->getSystemValue("instanceid", true);
-        $instanceId = $instanceId . "_";
+    private function parseUserId(string $userId): string {
+        $instanceId = $this->appConfig->getSystemValue("instanceid", true);
+        $instanceId .= "_";
 
-        if (substr($userId, 0, strlen($instanceId)) === $instanceId) {
+        if (str_starts_with($userId, $instanceId)) {
             return substr($userId, strlen($instanceId));
         }
 
@@ -826,7 +844,7 @@ class CallbackController extends Controller {
      *
      * @param File $file - file
      */
-    private function lock($file) {
+    private function lock(File $file): void {
         if (!$this->lockManager->isLockProviderAvailable()) {
             return;
         }
@@ -837,9 +855,9 @@ class CallbackController extends Controller {
             if (empty($this->lockManager->getLocks($fileId))) {
                 $this->lockManager->lock(new LockContext($file, ILock::TYPE_APP, $this->appName));
 
-                $this->logger->debug("$this->appName has locked file $fileId", ["app" => $this->appName]);
+                $this->logger->debug("$this->appName has locked file $fileId");
             }
-        } catch (PreConditionNotMetException | OwnerLockedException | NoLockProviderException $e) {
+        } catch (PreConditionNotMetException | OwnerLockedException | NoLockProviderException) {
         }
     }
 
@@ -848,7 +866,7 @@ class CallbackController extends Controller {
      *
      * @param File $file - file
      */
-    private function unlock($file) {
+    private function unlock(File $file): void {
         if (!$this->lockManager->isLockProviderAvailable()) {
             return;
         }
@@ -858,16 +876,14 @@ class CallbackController extends Controller {
         try {
             $this->lockManager->unlock(new LockContext($file, ILock::TYPE_APP, $this->appName));
 
-            $this->logger->debug("$this->appName has unlocked file $fileId", ["app" => $this->appName]);
-        } catch (PreConditionNotMetException | NoLockProviderException $e) {
+            $this->logger->debug("$this->appName has unlocked file $fileId");
+        } catch (PreConditionNotMetException | NoLockProviderException) {
         }
     }
 
     /**
      * Retry operation if a LockedException occurred
      * Other exceptions will still be thrown
-     *
-     * @param callable $operation
      *
      * @throws LockedException
      */
